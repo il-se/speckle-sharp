@@ -340,36 +340,13 @@ public static class Utils
     }
   }
 
-  public static PropertySetDefinition CreatePropertySet(Dictionary<string,object> propertySetDict, Document doc)
+  public static PropertySetDefinition CreatePropertySet(Document doc)
   {
     PropertySetDefinition propSetDef = new();
     propSetDef.SetToStandard(doc.Database);
     propSetDef.SubSetDatabaseDefaults(doc.Database);
     propSetDef.Description = "Property Set Definition added with Speckle";
     propSetDef.AppliesToAll = true;
-
-    // Create the definition for each property
-    foreach (var entry in propertySetDict)
-    {
-      if (GetPropertySetType(entry.Value) is Autodesk.Aec.PropertyData.DataType dataType)
-      {
-        var propDef = new PropertyDefinition
-        {
-          DataType = dataType,
-          Name = entry.Key,
-          DefaultData = entry.Value
-        };
-
-        propDef.SetToStandard(doc.Database);
-        propDef.SubSetDatabaseDefaults(doc.Database);
-        propSetDef.Definitions.Add(propDef);
-      }
-      else
-      {
-        SpeckleLog.Logger.Error( $"Could not determine property set entry type of {entry.Value}. Property set entry not added to property set definitions.");
-      }
-    }
-
     return propSetDef;
   }
 
@@ -423,33 +400,114 @@ public static class Utils
     {
       throw new InvalidOperationException($"Could not create property set on object {obj.Id}", e);
     }
-  } 
+  }
 
-  public static void SetPropertySets(this Entity entity, Document doc, List<Dictionary<string, object>> propertySetDicts)
+  /// <summary>
+  /// Tries to get a property definition from pset definition by property key name.
+  /// </summary>
+  /// <param name="propertySetDefinition">The pset definition</param>
+  /// <param name="keyName">The property's name</param>
+  /// <param name="propertyDefinition">Out for property definition</param>
+  /// <returns>True, if a match by key name has been found</returns>
+  public static bool TryGetPropertyDefinition(PropertySetDefinition propertySetDefinition,
+    string keyName, out PropertyDefinition propertyDefinition)
+  {
+    propertyDefinition = null;
+
+    foreach (PropertyDefinition propDef in propertySetDefinition.Definitions)
+    {
+      if (propDef?.Name == keyName)
+      {
+        propertyDefinition = propDef;
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Sets the properties given in a dictionary by property's keyname to the pset definition.
+  /// </summary>
+  /// <param name="doc">The document</param>
+  /// <param name="propertySetDefinition">The pset definition</param>
+  /// <param name="propertySetDict">A dictionary with property's key name vs. its value</param>
+  public static void SetPropertiesToPropertySetDefinition(Document doc, 
+    PropertySetDefinition propertySetDefinition, Dictionary<string, object> propertySetDict)
+  {
+    // Create the definition for each property
+    foreach (var entry in propertySetDict)
+    {
+      if (GetPropertySetType(entry.Value) is Autodesk.Aec.PropertyData.DataType dataType)
+      {
+        PropertyDefinition propDef;
+        if (!TryGetPropertyDefinition(propertySetDefinition, entry.Key, out propDef))
+        {
+          propDef = new PropertyDefinition
+          {
+            DataType = dataType,
+            Name = entry.Key,
+            DefaultData = entry.Value
+          };
+          
+          propDef.SetToStandard(doc.Database);
+          propDef.SubSetDatabaseDefaults(doc.Database);
+          propertySetDefinition.Definitions.Add(propDef);
+        }
+        else
+        {
+          propDef.DataType = dataType;
+          propDef.DefaultData = entry.Value;
+          propDef.SetToStandard(doc.Database);
+          propDef.SubSetDatabaseDefaults(doc.Database);
+        }
+      }
+      else
+      {
+        SpeckleLog.Logger.Error( $"Could not determine property set entry type of \"{entry.Value}\" ({entry.Key}). Property set entry not added to property set definitions.");
+      }
+    }
+  }
+
+  public static void SetPropertySets(this Entity entity, Document doc, Base propBase)
   {
     // create a dictionary for property sets for this object
-    var name = $"Speckle {entity.Handle} Property Set";
-    int count = 0;
     using DictionaryPropertySetDefinitions dictPropSetDef = new(doc.Database);
 
     // add property sets to object
     using Transaction tr = doc.Database.TransactionManager.StartTransaction();
-    foreach (Dictionary<string, object> propertySetDict in propertySetDicts)
+    
+    foreach (var propertySetDictSet in propBase.GetMembers())
     {
+      Dictionary<string, object> propertySetDict = (Dictionary<string, object>)propertySetDictSet.Value;
       try
       {
-        // create the property set definition for this set
-        PropertySetDefinition propSetDef = CreatePropertySet(propertySetDict, doc);
-        var propSetDefName = name += $" - {count}";
-        // add property set to the database
-        dictPropSetDef.AddNewRecord(propSetDefName, propSetDef);
-        tr.AddNewlyCreatedDBObject(propSetDef, true);
-        // add property set to the object
-        AddPropertySetToObject(entity, propSetDef.ObjectId);
-      }
-      catch (Autodesk.AutoCAD.Runtime.Exception) { }
+        var propSetObjId = dictPropSetDef.GetAt(propertySetDictSet.Key);
+        PropertySetDefinition propSetDef;
+        if (propSetObjId != ObjectId.Null)
+        {
+          propSetDef = tr.GetObject(propSetObjId, OpenMode.ForWrite) as PropertySetDefinition;
+          SetPropertiesToPropertySetDefinition(doc, propSetDef, propertySetDict);
+          
+          AddPropertySetToObject(entity, propSetDef.ObjectId);
+        }
+        else
+        {
+          // create the property set definition for this set
+          propSetDef = CreatePropertySet(doc);
+          SetPropertiesToPropertySetDefinition(doc, propSetDef, propertySetDict);
 
-      count++;
+          // add property set to the database
+          dictPropSetDef.AddNewRecord(propertySetDictSet.Key, propSetDef);
+          tr.AddNewlyCreatedDBObject(propSetDef, true);
+
+          AddPropertySetToObject(entity, propSetDef.ObjectId);
+        }
+      }
+      catch (Autodesk.AutoCAD.Runtime.Exception e)
+      {
+        SpeckleLog.Logger.Error($"Detected an error while setting pset data of {propertySetDictSet.Key}.");
+      }
     }
 
     tr.Commit();
@@ -509,7 +567,7 @@ public static class Utils
 
       if (setDictionary.Count > 0)
       {
-        propertySets[propertySet.Name] = CleanDictionary(setDictionary);
+        propertySets[propertySet.PropertySetDefinitionName] = CleanDictionary(setDictionary);
       }
     }
 

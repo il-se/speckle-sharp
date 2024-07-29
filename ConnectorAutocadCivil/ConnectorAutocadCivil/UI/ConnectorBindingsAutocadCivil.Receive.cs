@@ -545,21 +545,15 @@ public partial class ConnectorBindingsAutocad : ConnectorBindings
 
             // add property sets if this is Civil3D
 #if CIVIL
-            if (obj["propertySets"] is IReadOnlyList<object> list)
+            if (obj["propertySets"] is Base propBase)
             {
-              List<Dictionary<string, object>> propertySets = new();
-              foreach (var listObj in list)
-              {
-                propertySets.Add(listObj as Dictionary<string, object>);
-              }
-
               try
               {
-                o.SetPropertySets(Doc, propertySets);
+                o.SetPropertySets(Doc, propBase);
               }
               catch (Exception e) when (!e.IsFatal())
               {
-                SpeckleLog.Logger.Error(e, "Could not set property sets: {exceptionMessage}");
+                SpeckleLog.Logger.Error(e, "Could not set property sets: {exceptionMessage}", e.Message);
                 appObj.Log.Add($"Could not attach property sets: {e.Message}");
               }
             }
