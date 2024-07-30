@@ -477,36 +477,42 @@ public static class Utils
     // add property sets to object
     using Transaction tr = doc.Database.TransactionManager.StartTransaction();
     
-    foreach (var propertySetDictSet in propBase.GetMembers())
+    foreach (var propertySetDictSet in propBase.GetMembers(DynamicBaseMemberType.Dynamic))
     {
-      Dictionary<string, object> propertySetDict = (Dictionary<string, object>)propertySetDictSet.Value;
-      try
+      if (propertySetDictSet.Value is Dictionary<string, object> propertySetDict)
       {
-        var propSetObjId = dictPropSetDef.GetAt(propertySetDictSet.Key);
-        PropertySetDefinition propSetDef;
-        if (propSetObjId != ObjectId.Null)
+        try
         {
-          propSetDef = tr.GetObject(propSetObjId, OpenMode.ForWrite) as PropertySetDefinition;
-          SetPropertiesToPropertySetDefinition(doc, propSetDef, propertySetDict);
-          
-          AddPropertySetToObject(entity, propSetDef.ObjectId);
+          var propSetObjId = dictPropSetDef.GetAt(propertySetDictSet.Key);
+          PropertySetDefinition propSetDef;
+          if (propSetObjId != ObjectId.Null)
+          {
+            propSetDef = tr.GetObject(propSetObjId, OpenMode.ForWrite) as PropertySetDefinition;
+            SetPropertiesToPropertySetDefinition(doc, propSetDef, propertySetDict);
+
+            AddPropertySetToObject(entity, propSetDef.ObjectId);
+          }
+          else
+          {
+            // create the property set definition for this set
+            propSetDef = CreatePropertySet(doc);
+            SetPropertiesToPropertySetDefinition(doc, propSetDef, propertySetDict);
+
+            // add property set to the database
+            dictPropSetDef.AddNewRecord(propertySetDictSet.Key, propSetDef);
+            tr.AddNewlyCreatedDBObject(propSetDef, true);
+
+            AddPropertySetToObject(entity, propSetDef.ObjectId);
+          }
         }
-        else
+        catch (Autodesk.AutoCAD.Runtime.Exception e)
         {
-          // create the property set definition for this set
-          propSetDef = CreatePropertySet(doc);
-          SetPropertiesToPropertySetDefinition(doc, propSetDef, propertySetDict);
-
-          // add property set to the database
-          dictPropSetDef.AddNewRecord(propertySetDictSet.Key, propSetDef);
-          tr.AddNewlyCreatedDBObject(propSetDef, true);
-
-          AddPropertySetToObject(entity, propSetDef.ObjectId);
+          SpeckleLog.Logger.Error($"Detected an error while setting pset data of {propertySetDictSet.Key}.");
         }
       }
-      catch (Autodesk.AutoCAD.Runtime.Exception e)
+      else
       {
-        SpeckleLog.Logger.Error($"Detected an error while setting pset data of {propertySetDictSet.Key}.");
+        SpeckleLog.Logger.Warning($"Found non-dictionary type for property sets of {propertySetDictSet.Key}.");
       }
     }
 
