@@ -545,11 +545,11 @@ public partial class ConnectorBindingsAutocad : ConnectorBindings
 
             // add property sets if this is Civil3D
 #if CIVIL
-            if (obj["propertySets"] is Base propBase)
+            if (obj["propertySets"] is Base propertySetsBase)
             {
               try
               {
-                o.SetPropertySets(Doc, propBase);
+                o.SetPropertySets(Doc, propertySetsBase);
               }
               catch (Exception e) when (!e.IsFatal())
               {
